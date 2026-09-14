@@ -4,14 +4,13 @@ import 'package:provider/provider.dart';
 
 import '../data/app_state.dart';
 import '../theme/app_theme.dart';
+import '../widgets/password_requirements.dart';
 
-/// Dedicated sign-up screen backed by the NaviPet backend's confirmation-email
+/// Dedicated sign-up screen backed by the NaviPet backend's email-code
 /// registration flow (`AppState.signUp` -> `RegistrationGateway`).
 ///
-/// Deliberately does not sign the user in or navigate to `/map` on success:
-/// the backend never returns a session from `/auth/register`, so the user
-/// stays signed out until they confirm their email and the Supabase deep
-/// link (`navipet://auth-callback`) completes the session on this device.
+/// Registration continues on `/verify-email`, where the six-digit code creates
+/// a Supabase session through the backend's `/auth/verify-otp` endpoint.
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
 
@@ -20,14 +19,7 @@ class RegisterScreen extends StatefulWidget {
 }
 
 class _RegisterScreenState extends State<RegisterScreen> {
-  static const _passwordHelper =
-      'At least 8 characters, 1 number, and 1 special character';
   static final _emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
-  static final _digitPattern = RegExp(r'\d');
-  static final _specialCharPattern = RegExp(r'[^A-Za-z0-9]');
-
-  static const _successMessage =
-      'Confirmation email sent. Open it on this device to finish signing in.';
 
   final _firstNameController = TextEditingController();
   final _lastNameController = TextEditingController();
@@ -53,12 +45,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   bool _isValidEmail(String value) => _emailPattern.hasMatch(value);
 
-  bool _isValidPassword(String value) =>
-      value.length >= 8 &&
-      value.length <= 128 &&
-      _digitPattern.hasMatch(value) &&
-      _specialCharPattern.hasMatch(value);
-
   String? get _emailError {
     final value = _emailController.text.trim();
     if (value.isEmpty || _isValidEmail(value)) return null;
@@ -71,7 +57,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return 'Passwords do not match.';
   }
 
-  bool get _passwordMeetsRules => _isValidPassword(_passwordController.text);
+  bool get _passwordMeetsRules =>
+      PasswordRules.isValid(_passwordController.text);
 
   bool get _isFormValid =>
       _firstNameController.text.trim().isNotEmpty &&
@@ -84,6 +71,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   void _goToSignIn() => context.go('/signin');
 
+  void _goToVerification() {
+    final email = _emailController.text.trim();
+    if (!_isValidEmail(email)) {
+      setState(() {
+        _statusMessage = 'Enter your email address to verify its code.';
+        _statusIsError = true;
+      });
+      return;
+    }
+    context.go(
+      Uri(path: '/verify-email', queryParameters: {'email': email}).toString(),
+    );
+  }
+
   Future<void> _submit() async {
     final appState = context.read<AppState>();
     final result = await appState.signUp(
@@ -95,18 +96,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
     if (!mounted) return;
 
     switch (result.status) {
-      case AuthActionStatus.emailConfirmationRequired:
-        setState(() {
-          _statusMessage = _successMessage;
-          _statusIsError = false;
-        });
+      case AuthActionStatus.emailVerificationRequired:
+        final email = _emailController.text.trim();
+        context.go(
+          Uri(
+            path: '/verify-email',
+            queryParameters: {'email': email},
+          ).toString(),
+        );
       case AuthActionStatus.failure:
         setState(() {
           _statusMessage = result.message ?? 'Registration failed.';
           _statusIsError = true;
         });
       case AuthActionStatus.authenticated:
-      case AuthActionStatus.passwordResetSent:
+      case AuthActionStatus.passwordResetCodeSent:
+      case AuthActionStatus.passwordRecoveryVerified:
+      case AuthActionStatus.codeResent:
         break;
     }
   }
@@ -120,7 +126,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         scrolledUnderElevation: 0,
-        toolbarHeight: 36,
+        toolbarHeight: 48,
         leading: IconButton(
           padding: EdgeInsets.zero,
           icon: const Icon(Icons.arrow_back, color: AppColors.navy),
@@ -130,7 +136,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 408),
               child: Column(
@@ -138,33 +144,39 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 children: [
                   Center(
                     child: Container(
-                      width: 48,
-                      height: 48,
+                      width: 40,
+                      height: 40,
                       decoration: const BoxDecoration(
                         shape: BoxShape.circle,
                         color: AppColors.amber,
                       ),
                       padding: const EdgeInsets.all(8),
-                      child: Image.asset('assets/mascot.png', fit: BoxFit.contain),
+                      child: Image.asset(
+                        'assets/mascot.png',
+                        fit: BoxFit.contain,
+                      ),
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 24),
                   const Text(
                     'Create your account',
-                    textAlign: TextAlign.center,
                     style: TextStyle(
-                      fontSize: 18,
+                      fontSize: 32,
                       fontWeight: FontWeight.w700,
                       color: AppColors.navy,
+                      letterSpacing: -0.8,
                     ),
                   ),
-                  const SizedBox(height: 2),
+                  const SizedBox(height: 6),
                   const Text(
                     'Join the pack! Fill out the details below to get started.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 11, color: AppColors.labelInk),
+                    style: TextStyle(
+                      fontSize: 16,
+                      height: 1.45,
+                      color: AppColors.labelInk,
+                    ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 24),
                   if (_statusMessage != null) ...[
                     _statusBanner(),
                     const SizedBox(height: 8),
@@ -172,36 +184,32 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   _field(
                     label: 'First Name',
                     controller: _firstNameController,
-                    hint: 'Elbee',
+                    hint: 'e.g. Elbee',
                     textInputAction: TextInputAction.next,
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 16),
                   _field(
                     label: 'Last Name',
                     controller: _lastNameController,
-                    hint: 'Shark',
+                    hint: 'e.g. Shark',
                     textInputAction: TextInputAction.next,
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 16),
                   _field(
-                    label: 'Email Address',
+                    label: 'Campus Email',
                     controller: _emailController,
                     hint: 'hello@navipet.com',
                     keyboardType: TextInputType.emailAddress,
                     textInputAction: TextInputAction.next,
                     errorText: _emailError,
                   ),
-                  const SizedBox(height: 6),
+                  const SizedBox(height: 16),
                   _field(
                     label: 'Password',
                     controller: _passwordController,
                     hint: '••••••••',
                     obscureText: !_showPassword,
                     textInputAction: TextInputAction.next,
-                    helperText: _passwordHelper,
-                    helperIsError:
-                        _passwordController.text.isNotEmpty &&
-                        !_passwordMeetsRules,
                     trailing: IconButton(
                       padding: EdgeInsets.zero,
                       onPressed: () =>
@@ -214,6 +222,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                     ),
                   ),
+                  const SizedBox(height: 6),
+                  PasswordRequirements(password: _passwordController.text),
                   const SizedBox(height: 6),
                   _field(
                     label: 'Confirm Password',
@@ -238,17 +248,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 22),
                   _termsRow(),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 20),
                   _submitButton(appState),
-                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: appState.isBusy ? null : _goToVerification,
+                    child: const Text('Already have a verification code?'),
+                  ),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       const Text(
                         'Already have an account? ',
-                        style: TextStyle(fontSize: 12, color: AppColors.labelInk),
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.labelInk,
+                        ),
                       ),
                       TextButton(
                         onPressed: _goToSignIn,
@@ -303,8 +319,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           value: _agreedToTerms,
           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
           visualDensity: VisualDensity.compact,
-          onChanged: (value) =>
-              setState(() => _agreedToTerms = value ?? false),
+          onChanged: (value) => setState(() => _agreedToTerms = value ?? false),
         ),
         const SizedBox(width: 4),
         const Expanded(
@@ -341,8 +356,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 ),
               )
             : const Text(
-                'Create Account',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                'Create account',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
               ),
       ),
     );
@@ -362,57 +377,116 @@ class _RegisterScreenState extends State<RegisterScreen> {
     Widget? trailing,
   }) {
     final hasError = errorText != null;
-    return TextField(
-      controller: controller,
-      obscureText: obscureText,
-      keyboardType: keyboardType,
-      textInputAction: textInputAction,
-      onSubmitted: onSubmitted,
-      onChanged: (_) => setState(() {}),
-      autocorrect: false,
-      enableSuggestions: !obscureText,
-      style: const TextStyle(fontSize: 13),
-      decoration: InputDecoration(
-        isDense: true,
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        labelText: label,
-        labelStyle: const TextStyle(fontSize: 12, color: AppColors.labelInk),
-        floatingLabelStyle: const TextStyle(
-          fontSize: 12,
-          color: AppColors.labelInk,
-        ),
-        hintText: hint,
-        hintStyle: const TextStyle(fontSize: 12),
-        suffixIcon: trailing,
-        errorText: errorText,
-        errorStyle: const TextStyle(fontSize: 10, height: 0.9),
-        errorMaxLines: 2,
-        helperText: helperText,
-        helperStyle: TextStyle(
-          fontSize: 10,
-          height: 0.9,
-          color: helperIsError ? AppColors.danger : AppColors.labelInk,
-        ),
-        helperMaxLines: 2,
-        filled: true,
-        fillColor: Colors.white,
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: const BorderSide(color: AppColors.inputBorder),
-        ),
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: hasError ? AppColors.danger : AppColors.inputBorder,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(left: 3, bottom: 6),
+          child: Text(
+            label,
+            style: const TextStyle(fontSize: 13, color: Color(0xFF18181B)),
           ),
         ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(10),
-          borderSide: BorderSide(
-            color: hasError ? AppColors.danger : AppColors.navy,
+        TextField(
+          controller: controller,
+          obscureText: obscureText,
+          keyboardType: keyboardType,
+          textInputAction: textInputAction,
+          onSubmitted: onSubmitted,
+          onChanged: (_) => setState(() {}),
+          autocorrect: false,
+          enableSuggestions: !obscureText,
+          style: const TextStyle(fontSize: 16),
+          decoration: InputDecoration(
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 14,
+            ),
+            hintText: hint,
+            hintStyle: const TextStyle(fontSize: 16, color: Color(0xFF747B8B)),
+            suffixIcon: trailing,
+            filled: true,
+            fillColor: hasError
+                ? const Color(0xFFFFF8F8)
+                : const Color(0xFFF7F7F8),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(9),
+              borderSide: BorderSide(
+                color: hasError ? AppColors.danger : Colors.transparent,
+              ),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(9),
+              borderSide: BorderSide(
+                color: hasError ? AppColors.danger : Colors.transparent,
+              ),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(9),
+              borderSide: BorderSide(
+                color: hasError ? AppColors.danger : AppColors.navy,
+              ),
+            ),
           ),
         ),
-      ),
+        if (errorText != null) ...[
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              const Icon(
+                Icons.error_outline,
+                size: 14,
+                color: AppColors.danger,
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  errorText,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.danger,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+        if (helperText != null) ...[
+          const SizedBox(height: 12),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF0F0F1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(
+                  Icons.info_outline,
+                  size: 16,
+                  color: helperIsError ? AppColors.danger : AppColors.labelInk,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    helperText,
+                    style: TextStyle(
+                      fontSize: 13,
+                      height: 1.35,
+                      color: helperIsError
+                          ? AppColors.danger
+                          : AppColors.labelInk,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
     );
   }
 }

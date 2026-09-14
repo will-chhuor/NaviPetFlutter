@@ -3,8 +3,9 @@
 NaviPet is a campus companion for CSU Long Beach. The current functional slice
 includes:
 
-- Supabase email/password authentication, account creation, password reset,
-  anonymous guest sessions, persisted sessions, and profile data.
+- Supabase email/password authentication, six-digit email verification,
+  account creation, password reset, anonymous guest sessions, persisted
+  sessions, and profile data.
 - A native Mapbox map with live device location.
 - Mapbox destination autocomplete and walking directions.
 - A route line, destination marker, ETA/distance preview, maneuver guidance,
@@ -74,14 +75,17 @@ Copy `.env.example` to `.env`. The `.env` file is git-ignored.
 MAPBOX_PUBLIC_TOKEN=pk.your_public_token
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_PUBLISHABLE_KEY=sb_publishable_your_key
-BACKEND_BASE_URL=
+BACKEND_BASE_URL=https://navipetbackend.onrender.com
 ```
 
 Use only Supabase's publishable/anon client key. Never place a Supabase
 `service_role` or secret key in the app.
 
-`BACKEND_BASE_URL` points at the Fastify API in
-[`Ben2104/NavipetBackend`](https://github.com/navipet-senior-project/NavipetBackend) 
+`BACKEND_BASE_URL` points at the hosted Fastify API used for registration,
+login, OTP verification, and password recovery. Its interactive API reference
+is available at <https://navipetbackend.onrender.com/docs>. The server source is
+[`navipet-senior-project/NavipetBackend`](https://github.com/navipet-senior-project/NavipetBackend).
+
 ### Mapbox Android download token
 
 Android builds also require a secret Mapbox token with `DOWNLOADS:READ`. Put it
@@ -105,20 +109,41 @@ MAPBOX_DOWNLOADS_TOKEN=sk.your_download_token
    run the entire file again; it is safe to re-run and adds the new tables.
 3. In **Authentication > Providers**, keep Email enabled.
 4. Enable anonymous sign-ins if **Continue as Guest** should work.
-5. Decide whether new users must confirm their email. NaviPet handles both
-   configurations: with confirmation enabled it asks users to check their email;
-   without it they enter the app immediately.
-6. If email confirmation is enabled, open **Authentication > URL Configuration**
-   and add `navipet://auth-callback` to **Redirect URLs**. The confirmation
-   email links back to that scheme; without it registered on this list, tapping
-   the link will not complete sign-in on the device (see
-   [`register_screen.dart`](lib/screens/register_screen.dart)).
+5. Keep email confirmation enabled. After registration, NaviPet prompts for the
+   six-digit code sent by Supabase and verifies it through the Fastify API.
+6. In the Supabase email template for **Confirm signup**, include the token with
+   `{{ .Token }}` so the email contains the six-digit code expected by the app.
 7. Copy the Project URL and publishable key from Supabase's **Connect** panel into
    `.env`.
 
 Supabase Auth owns passwords and sessions. `profiles` stores app-facing account
 data, `classes` stores each user's schedule and locations, and
 `task_completions` stores daily progress. Owner-only policies protect each row.
+
+## Authentication flow
+
+NaviPet uses the Fastify authentication endpoints and then hands successful
+access/refresh token pairs to Supabase's persisted mobile session manager.
+
+```text
+Sign in:        Sign In → Home
+Sign up:        Sign Up → OTP Verification → Home
+Forgot password: Sign In → Forgot Password → Email Sent
+                 → OTP Verification → Reset Password → Home
+```
+
+The OTP screen requires all six digits before enabling verification. Incorrect
+or expired codes remain on that screen and expose **Resend Code**. A recovery
+OTP creates only a pending recovery session; it cannot open Home until
+`POST /auth/reset-password` succeeds. Successful password reset adopts that
+session automatically, so the user arrives at Home without signing in again.
+
+Direct backend calls used by this flow are `POST /auth/login`,
+`POST /auth/register`, `POST /auth/forgot-password`,
+`POST /auth/verify-otp`, and `POST /auth/reset-password`. Signup-code resend
+uses Supabase's publishable client because the current Fastify API does not
+publish a signup-resend endpoint; password-recovery resend repeats
+`POST /auth/forgot-password`.
 
 ## Run on Android
 
@@ -151,12 +176,8 @@ Mapbox packages. GPS on an emulator is a fixed or manually-set mock location
 UI, authentication, search, and a static route preview, but a physical phone
 is needed for real turn-by-turn navigation.
 
-To test the email-confirmation deep link on the emulator without an email
-client configured on it, trigger the link directly:
-
-```bash
-adb shell am start -W -a android.intent.action.VIEW -d "navipet://auth-callback"
-```
+To test signup, use an inbox you can access, then enter the six-digit code from
+the confirmation email on the app's **Verify your email** screen.
 
 ### Physical Android phone
 
@@ -280,8 +301,10 @@ build\app\outputs\flutter-apk\app-debug.apk
 | Supabase setup notice on sign-in | Add `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` to `.env`, then fully restart the app. |
 | Guest sign-in fails | Enable anonymous sign-ins in Supabase Authentication settings. |
 | New account cannot sign in immediately | Check the inbox and confirm the account, or disable Confirm email in Supabase for development. |
+| Verification code is invalid or expired | Tap **Resend Code** on the OTP screen and enter the newest code. |
+| Password reset returns to OTP | The recovery token expired; request a new reset code and repeat the recovery flow. |
 | "Backend not configured" error on sign-up | Add `BACKEND_BASE_URL` to `.env` and restart the app. |
-| Confirmation email link does not open NaviPet | Add `navipet://auth-callback` to Supabase **Authentication > URL Configuration > Redirect URLs**. |
+| Confirmation email has a link but no six-digit code | Update the Supabase **Confirm signup** email template to include `{{ .Token }}`. |
 | Map is blank or destination search fails | Verify `MAPBOX_PUBLIC_TOKEN` is a valid `pk.*` token. |
 | Android Mapbox dependency returns 401 | Verify the global `MAPBOX_DOWNLOADS_TOKEN` starts with `sk.` and has `DOWNLOADS:READ`. |
 | Current location is unavailable | Enable precise location for NaviPet and turn on the phone's Location Services. |
@@ -297,4 +320,8 @@ forward-compatibility warning from those plugins; the Android build succeeds on
 the pinned Flutter/Mapbox versions in this repository.
 
 ## Collaborators
-Jomar Hernandez @thejomar
+
+- [@will-chhuor](https://github.com/will-chhuor)
+- [@thejomar](https://github.com/thejomar)
+- Khoi Do ([@Ben2104](https://github.com/Ben2104))
+- Jan Kirvey Montemayor ([@Kura-Yami](https://github.com/Kura-Yami))

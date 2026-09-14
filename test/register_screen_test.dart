@@ -20,6 +20,15 @@ class _FakeRegistrationGateway implements RegistrationGateway {
   String? capturedPassword;
 
   @override
+  Future<RegistrationVerificationSuccess> signIn({
+    required String email,
+    required String password,
+  }) async => const RegistrationVerificationSuccess(
+    accessToken: 'access-token',
+    refreshToken: 'refresh-token',
+  );
+
+  @override
   Future<RegistrationSuccess> register({
     required String firstName,
     required String lastName,
@@ -34,6 +43,38 @@ class _FakeRegistrationGateway implements RegistrationGateway {
     if (error != null) throw error!;
     return result!;
   }
+
+  @override
+  Future<RegistrationVerificationSuccess> verifyRegistrationCode({
+    required String email,
+    required String code,
+  }) async {
+    if (error != null) throw error!;
+    return const RegistrationVerificationSuccess(
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+    );
+  }
+
+  @override
+  Future<PasswordResetRequestSuccess> requestPasswordReset({
+    required String email,
+  }) async => const PasswordResetRequestSuccess(
+    message: 'Verification code sent. Check your inbox.',
+  );
+
+  @override
+  Future<RegistrationVerificationSuccess> verifyPasswordRecoveryCode({
+    required String email,
+    required String code,
+  }) => verifyRegistrationCode(email: email, code: code);
+
+  @override
+  Future<void> resetPassword({
+    required String accessToken,
+    required String newPassword,
+    required String confirmPassword,
+  }) async {}
 }
 
 Widget _harness(AppState appState) {
@@ -45,6 +86,12 @@ Widget _harness(AppState appState) {
         builder: (_, _) => const Scaffold(body: Text('Sign in screen')),
       ),
       GoRoute(path: '/register', builder: (_, _) => const RegisterScreen()),
+      GoRoute(
+        path: '/verify-email',
+        builder: (_, state) => Scaffold(
+          body: Text('Verify ${state.uri.queryParameters['email'] ?? ''}'),
+        ),
+      ),
       GoRoute(
         path: '/map',
         builder: (_, _) => const Scaffold(body: Text('Map screen')),
@@ -66,9 +113,17 @@ Future<void> _fillValidForm(WidgetTester tester) async {
   await tester.pump();
 }
 
-ElevatedButton _submitButton(WidgetTester tester) => tester.widget<ElevatedButton>(
-  find.widgetWithText(ElevatedButton, 'Create Account'),
-);
+ElevatedButton _submitButton(WidgetTester tester) =>
+    tester.widget<ElevatedButton>(
+      find.widgetWithText(ElevatedButton, 'Create account'),
+    );
+
+Future<void> _acceptTerms(WidgetTester tester) async {
+  await tester.ensureVisible(find.byType(Checkbox));
+  await tester.pumpAndSettle();
+  await tester.tap(find.byType(Checkbox));
+  await tester.pump();
+}
 
 void main() {
   group('RegisterScreen validation', () {
@@ -104,8 +159,7 @@ void main() {
         );
         await tester.enterText(find.byType(TextField).at(3), 'Password1!');
         await tester.enterText(find.byType(TextField).at(4), 'Password2!');
-        await tester.tap(find.byType(Checkbox));
-        await tester.pump();
+        await _acceptTerms(tester);
 
         expect(find.text('Passwords do not match.'), findsOneWidget);
         expect(_submitButton(tester).onPressed, isNull);
@@ -136,12 +190,50 @@ void main() {
         await tester.pumpWidget(_harness(appState));
 
         await _fillValidForm(tester);
-        await tester.tap(find.byType(Checkbox));
-        await tester.pump();
+        await _acceptTerms(tester);
 
         expect(_submitButton(tester).onPressed, isNotNull);
       },
     );
+
+    testWidgets('shows a green check for every satisfied password rule', (
+      tester,
+    ) async {
+      final appState = AppState(
+        registrationGateway: _FakeRegistrationGateway(),
+      );
+      addTearDown(appState.dispose);
+      await tester.pumpWidget(_harness(appState));
+
+      await tester.enterText(find.byType(TextField).at(3), 'Password1!');
+      await tester.pump();
+
+      expect(find.byIcon(Icons.check_circle), findsNWidgets(5));
+    });
+
+    testWidgets('keeps submit disabled when any password rule is unmet', (
+      tester,
+    ) async {
+      final appState = AppState(
+        registrationGateway: _FakeRegistrationGateway(),
+      );
+      addTearDown(appState.dispose);
+      await tester.pumpWidget(_harness(appState));
+
+      await _fillValidForm(tester);
+      await tester.enterText(find.byType(TextField).at(3), 'password1!');
+      await tester.enterText(find.byType(TextField).at(4), 'password1!');
+      await _acceptTerms(tester);
+      await tester.pumpAndSettle();
+
+      expect(_submitButton(tester).onPressed, isNull);
+      expect(
+        find.byKey(
+          const ValueKey('password-requirement-unmet-One uppercase letter'),
+        ),
+        findsOneWidget,
+      );
+    });
 
     testWidgets('back arrow returns to the sign-in screen', (tester) async {
       final appState = AppState(
@@ -155,16 +247,81 @@ void main() {
 
       expect(find.text('Sign in screen'), findsOneWidget);
     });
+
+    testWidgets('Already have an account navigates to Sign In', (tester) async {
+      final appState = AppState(
+        registrationGateway: _FakeRegistrationGateway(),
+      );
+      addTearDown(appState.dispose);
+      await tester.pumpWidget(_harness(appState));
+
+      await tester.ensureVisible(find.text('Sign in'));
+      await tester.tap(find.text('Sign in'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Sign in screen'), findsOneWidget);
+    });
+
+    testWidgets('opens verification for an existing code and valid email', (
+      tester,
+    ) async {
+      final appState = AppState(
+        registrationGateway: _FakeRegistrationGateway(),
+      );
+      addTearDown(appState.dispose);
+      await tester.pumpWidget(_harness(appState));
+
+      await tester.enterText(
+        find.byType(TextField).at(2),
+        'person@example.com',
+      );
+      final verificationLink = find.text('Already have a verification code?');
+      await tester.ensureVisible(verificationLink);
+      await tester.tap(verificationLink);
+      await tester.pumpAndSettle();
+
+      expect(find.text('Verify person@example.com'), findsOneWidget);
+    });
   });
 
   group('RegisterScreen submission', () {
+    testWidgets('shows a clear message when the email already has an account', (
+      tester,
+    ) async {
+      final gateway = _FakeRegistrationGateway(
+        error: const RegistrationException(
+          message: 'User already registered',
+          statusCode: 409,
+          code: 'USER_ALREADY_EXISTS',
+        ),
+      );
+      final appState = AppState(registrationGateway: gateway);
+      addTearDown(appState.dispose);
+      await tester.pumpWidget(_harness(appState));
+
+      await _fillValidForm(tester);
+      await _acceptTerms(tester);
+      final submit = find.widgetWithText(ElevatedButton, 'Create account');
+      await tester.ensureVisible(submit);
+      await tester.tap(submit);
+      await tester.pump();
+
+      expect(
+        find.text(
+          'An account with this email already exists. Please log in or use a different email.',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('Verify person@example.com'), findsNothing);
+    });
+
     testWidgets(
-      'shows the confirmation message and does not navigate to /map on success',
+      'opens code verification with the registered email on success',
       (tester) async {
         final gateway = _FakeRegistrationGateway(
           result: const RegistrationSuccess(
-            message: 'Confirmation email sent. Check your inbox.',
-            confirmationRequired: true,
+            message: 'Verification code sent. Check your inbox.',
+            otpRequired: true,
           ),
         );
         final appState = AppState(registrationGateway: gateway);
@@ -172,20 +329,17 @@ void main() {
         await tester.pumpWidget(_harness(appState));
 
         await _fillValidForm(tester);
-        await tester.tap(find.byType(Checkbox));
-        await tester.pump();
-        await tester.tap(find.widgetWithText(ElevatedButton, 'Create Account'));
+        await _acceptTerms(tester);
+        final submit = find.widgetWithText(ElevatedButton, 'Create account');
+        await tester.ensureVisible(submit);
+        await tester.pumpAndSettle();
+        await tester.tap(submit);
         await tester.pumpAndSettle();
 
         expect(gateway.callCount, 1);
         expect(gateway.capturedFirstName, 'Elbee');
         expect(gateway.capturedLastName, 'Shark');
-        expect(
-          find.text(
-            'Confirmation email sent. Open it on this device to finish signing in.',
-          ),
-          findsOneWidget,
-        );
+        expect(find.text('Verify person@example.com'), findsOneWidget);
         expect(find.text('Map screen'), findsNothing);
         expect(appState.isAuthenticated, isFalse);
       },
